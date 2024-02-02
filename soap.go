@@ -112,8 +112,8 @@ func (c *Client) Call(m string, p SoapParams) (res *Response, err error) {
 }
 
 // CallWithCustomEnvelope call's the method m with Params p and custom Envelope Struct for unmarshalling
-func (c *Client) CallWithCustomEnvelope(m string, p SoapParams, s interface{}) (res *ResponseWithCustomEnvelope, err error) {
-	return c.DoWithCustomEnvelopeStruct(NewRequest(m, p), s)
+func (c *Client) CallWithCustomEnvelope(m string, p SoapParams) (res *ResponseWithCustomEnvelope, err error) {
+	return c.DoWithCustomEnvelopeStruct(NewRequest(m, p))
 }
 
 // CallByStruct call's by struct
@@ -224,7 +224,7 @@ func (c *Client) Do(req *Request) (res *Response, err error) {
 }
 
 // DoWithCustomEnvelopeStruct Process Soap Request
-func (c *Client) DoWithCustomEnvelopeStruct(req *Request, soap interface{}) (res *ResponseWithCustomEnvelope, err error) {
+func (c *Client) DoWithCustomEnvelopeStruct(req *Request) (res *ResponseWithCustomEnvelope, err error) {
 	c.onDefinitionsRefresh.Wait()
 	c.onRequest.Add(1)
 	defer c.onRequest.Done()
@@ -273,10 +273,6 @@ func (c *Client) DoWithCustomEnvelopeStruct(req *Request, soap interface{}) (res
 	// error: xml: encoding "ISO-8859-1" declared but Decoder.CharsetReader is nil
 	// https://stackoverflow.com/questions/6002619/unmarshal-an-iso-8859-1-xml-input-in-go
 	// https://github.com/golang/go/issues/8937
-
-	decoder := xml.NewDecoder(bytes.NewReader(b))
-	decoder.CharsetReader = charset.NewReaderLabel
-	err = decoder.Decode(&soap)
 
 	res = &ResponseWithCustomEnvelope{
 		Response: b,

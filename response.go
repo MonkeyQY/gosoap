@@ -8,8 +8,13 @@ import (
 // Response Soap Response
 type Response struct {
 	Body    []byte
-	Header  []byte
+	Headers []byte
 	Payload []byte
+}
+
+type ResponseWithCustomEnvelope struct {
+	Response []byte
+	Payload  []byte
 }
 
 // FaultError implements error interface
@@ -54,4 +59,22 @@ func (r *Response) Unmarshal(v interface{}) error {
 	}
 
 	return xml.Unmarshal(r.Body, v)
+}
+
+func (r *ResponseWithCustomEnvelope) CustomUnmarshal(v interface{}) error {
+	if len(r.Response) == 0 {
+		return fmt.Errorf("Response is empty")
+	}
+
+	var fault Fault
+	err := xml.Unmarshal(r.Response, &fault)
+	if err != nil {
+		return fmt.Errorf("error unmarshalling the body to Fault: %v", err.Error())
+	}
+
+	if fault.Code != "" {
+		return FaultError{fault: &fault}
+	}
+
+	return xml.Unmarshal(r.Response, v)
 }

@@ -48,6 +48,12 @@ type Config struct {
 	Logger DumpLogger
 }
 
+type Envelope struct {
+	XMLName xml.Name `xml:"Envelope"`
+	Body    interface{}
+	Header  interface{}
+}
+
 // SoapClient return new *Client to handle the requests with the WSDL
 func SoapClient(wsdl string, httpClient *http.Client) (*Client, error) {
 	return SoapClientWithConfig(wsdl, httpClient, &Config{Dump: false, Logger: &fmtLogger{}})
@@ -103,6 +109,11 @@ type Client struct {
 // Call call's the method m with Params p
 func (c *Client) Call(m string, p SoapParams) (res *Response, err error) {
 	return c.Do(NewRequest(m, p))
+}
+
+// CallWithCustomEnvelope call's the method m with Params p and custom Envelope Struct for unmarshalling
+func (c *Client) CallWithCustomEnvelope(m string, p SoapParams, s interface{}) (res *ResponseWithCustomEnvelope, err error) {
+	return c.DoWithCustomEnvelopeStruct(NewRequest(m, p), s)
 }
 
 // CallByStruct call's by struct
@@ -190,7 +201,74 @@ func (c *Client) Do(req *Request) (res *Response, err error) {
 		return nil, ErrorWithPayload{err, p.Payload}
 	}
 
+	// err = xml.Unmarshal(b, &soap)
+	// error: xml: encoding "ISO-8859-1" declared but Decoder.CharsetReader is nil
+	// https://stackoverflow.com/questions/6002619/unmarshal-an-iso-8859-1-xml-input-in-go
+	// https://github.com/golang/go/issues/8937
+
 	var soap SoapEnvelope
+	decoder := xml.NewDecoder(bytes.NewReader(b))
+	decoder.CharsetReader = charset.NewReaderLabel
+	err = decoder.Decode(&soap)
+
+	res = &Response{
+		Body:    soap.Body.Contents,
+		Headers: soap.Header.Contents,
+		Payload: p.Payload,
+	}
+	if err != nil {
+		return res, ErrorWithPayload{err, p.Payload}
+	}
+
+	return res, nil
+}
+
+// DoWithCustomEnvelopeStruct Process Soap Request
+func (c *Client) DoWithCustomEnvelopeStruct(req *Request, soap interface{}) (res *ResponseWithCustomEnvelope, err error) {
+	c.onDefinitionsRefresh.Wait()
+	c.onRequest.Add(1)
+	defer c.onRequest.Done()
+
+	c.once.Do(func() {
+		c.initWsdl()
+		// 15 minute to prevent abuse.
+		if c.RefreshDefinitionsAfter >= 15*time.Minute {
+			go c.waitAndRefreshDefinitions(c.RefreshDefinitionsAfter)
+		}
+	})
+
+	if c.definitionsErr != nil {
+		return nil, c.definitionsErr
+	}
+
+	if c.Definitions == nil {
+		return nil, errors.New("wsdl definitions not found")
+	}
+
+	if c.Definitions.Services == nil {
+		return nil, errors.New("No Services found in wsdl definitions")
+	}
+
+	p := &process{
+		Client:     c,
+		Request:    req,
+		SoapAction: c.Definitions.GetSoapActionFromWsdlOperation(req.Method),
+	}
+
+	if p.SoapAction == "" && c.AutoAction {
+		p.SoapAction = fmt.Sprintf("%s/%s/%s", c.URL, c.Definitions.Services[0].Name, req.Method)
+	}
+
+	p.Payload, err = xml.MarshalIndent(p, "", "    ")
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := p.doRequest(c.Definitions.Services[0].Ports[0].SoapAddresses[0].Location)
+	if err != nil {
+		return nil, ErrorWithPayload{err, p.Payload}
+	}
+
 	// err = xml.Unmarshal(b, &soap)
 	// error: xml: encoding "ISO-8859-1" declared but Decoder.CharsetReader is nil
 	// https://stackoverflow.com/questions/6002619/unmarshal-an-iso-8859-1-xml-input-in-go
@@ -200,10 +278,9 @@ func (c *Client) Do(req *Request) (res *Response, err error) {
 	decoder.CharsetReader = charset.NewReaderLabel
 	err = decoder.Decode(&soap)
 
-	res = &Response{
-		Body:    soap.Body.Contents,
-		Header:  soap.Header.Contents,
-		Payload: p.Payload,
+	res = &ResponseWithCustomEnvelope{
+		Response: b,
+		Payload:  p.Payload,
 	}
 	if err != nil {
 		return res, ErrorWithPayload{err, p.Payload}
